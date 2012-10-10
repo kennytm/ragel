@@ -1042,7 +1042,9 @@ void JavaTabCodeGen::writeExec()
 			"	}\n";
 	}
 
-	out << "case " << _resume << ":\n"; 
+	out <<
+		"	// $FALL-THROUGH$\n"
+		"	case " << _resume << ":\n";
 
 	if ( redFsm->anyFromStateActions() ) {
 		out <<
@@ -1064,8 +1066,11 @@ void JavaTabCodeGen::writeExec()
 	if ( useIndicies )
 		out << "	_trans = " << I() << "[_trans];\n";
 	
-	if ( redFsm->anyEofTrans() )
-		out << "case " << _eof_trans << ":\n";
+	if ( redFsm->anyEofTrans() ) {
+		out <<
+			"	// $FALL-THROUGH$\n"
+			"	case " << _eof_trans << ":\n";
+	}
 
 	if ( redFsm->anyRegCurStateRef() )
 		out << "	_ps = " << vCS() << ";\n";
@@ -1089,7 +1094,10 @@ void JavaTabCodeGen::writeExec()
 			"\n";
 	}
 
-	out << "case " << _again << ":\n";
+	out <<
+		"	// $FALL-THROUGH$\n"
+		"	case " << _again << ":\n";
+
 
 	if ( redFsm->anyToStateActions() ) {
 		out <<
@@ -1125,7 +1133,10 @@ void JavaTabCodeGen::writeExec()
 			"	continue _goto;\n";
 	}
 
-	out << "case " << _test_eof << ":\n"; 
+	out <<
+		"	// $FALL-THROUGH$\n"
+		"	case " << _test_eof << ":\n";
+
 
 	if ( redFsm->anyEofTrans() || redFsm->anyEofActions() ) {
 		out <<
@@ -1157,7 +1168,9 @@ void JavaTabCodeGen::writeExec()
 			"\n";
 	}
 
-	out << "case " << _out << ":\n"; 
+	out <<
+		"	// $FALL-THROUGH$\n"
+		"	case " << _out << ":\n";
 
 	/* The switch and goto loop. */
 	out << "	}\n";
@@ -1188,7 +1201,7 @@ std::ostream &JavaTabCodeGen::ARRAY_ITEM( string item, bool last )
 	
 	if ( !last ) {
 		if ( item_count % SAIIC == 0 ) {
-			out << "\n\t};\n};\n"
+			out << "\n\t};\n}\n"
 				"private static "<< array_type << "[] init_" << 
 				array_name << "_" << div_count << "()\n"
 				"{\n\t"
