@@ -175,7 +175,8 @@ struct RedAction
 		numEofRefs(0),
 		bAnyNextStmt(false), 
 		bAnyCurStateRef(false),
-		bAnyBreakStmt(false)
+		bAnyBreakStmt(false),
+		bUsingAct(false)
 	{ }
 	
 	const GenActionTable &getKey() 
@@ -197,10 +198,12 @@ struct RedAction
 	bool anyNextStmt() { return bAnyNextStmt; }
 	bool anyCurStateRef() { return bAnyCurStateRef; }
 	bool anyBreakStmt() { return bAnyBreakStmt; }
+	bool usingAct() { return bUsingAct; }
 
 	bool bAnyNextStmt;
 	bool bAnyCurStateRef;
 	bool bAnyBreakStmt;
+	bool bUsingAct;
 };
 typedef AvlTree<RedAction, GenActionTable, CmpGenActionTable> GenActionTableMap;
 
@@ -248,22 +251,45 @@ struct CmpRedCondEl
 	}
 };
 
+typedef Vector< GenAction* > GenCondSet;
+
+struct GenCondSpace
+{
+	Key baseKey;
+	GenCondSet condSet;
+	int condSpaceId;
+
+	long fullSize()
+		{ return ( 1 << condSet.length() ); }
+
+	GenCondSpace *next, *prev;
+};
+typedef DList<GenCondSpace> CondSpaceList;
+
+
 /* Reduced transition. */
 struct RedTransAp
 :
 	public AvlTreeEl<RedTransAp>
 {
-	RedTransAp( RedStateAp *targ, RedAction *action, int id )
-		: targ(targ), action(action), id(id), pos(-1), labelNeeded(true) { }
+	RedTransAp( int id )
+	:
+		id(id),
+		labelNeeded(true),
+		condSpace(0),
+		errCond(0)
+	{ }
 
-	RedStateAp *targ;
-	RedAction *action;
 	int id;
-	int pos;
 	bool partitionBoundary;
 	bool labelNeeded;
 
+	long condFullSize() 
+		{ return condSpace == 0 ? 1 : condSpace->fullSize(); }
+
+	GenCondSpace *condSpace;
 	RedCondList outConds;
+	RedCondAp *errCond;
 };
 
 /* Compare of transitions for the final reduction of transitions. Comparison
@@ -273,13 +299,9 @@ struct CmpRedTransAp
 {
 	static int compare( const RedTransAp &t1, const RedTransAp &t2 )
 	{
-		if ( t1.targ < t2.targ )
+		if ( t1.condSpace < t2.condSpace )
 			return -1;
-		else if ( t1.targ > t2.targ )
-			return 1;
-		else if ( t1.action < t2.action )
-			return -1;
-		else if ( t1.action > t2.action )
+		else if ( t1.condSpace > t2.condSpace )
 			return 1;
 		else {
 			return CmpTable<RedCondEl, CmpRedCondEl>::compare(
@@ -346,8 +368,6 @@ typedef MergeSort<RedSpanMapEl, CmpRedSpanMapEl> RedSpanMapSort;
 typedef Vector<int> EntryIdVect;
 typedef Vector<char*> EntryNameVect;
 
-typedef Vector< GenAction* > GenCondSet;
-
 struct Condition
 {
 	Condition( )
@@ -360,16 +380,6 @@ struct Condition
 	Condition *next, *prev;
 };
 typedef DList<Condition> ConditionList;
-
-struct GenCondSpace
-{
-	Key baseKey;
-	GenCondSet condSet;
-	int condSpaceId;
-
-	GenCondSpace *next, *prev;
-};
-typedef DList<GenCondSpace> CondSpaceList;
 
 struct GenStateCond
 {
@@ -389,7 +399,6 @@ struct RedStateAp
 	RedStateAp()
 	: 
 		defTrans(0), 
-		condList(0),
 		transList(0), 
 		isFinal(false), 
 		labelNeeded(false), 
@@ -402,18 +411,14 @@ struct RedStateAp
 		id(0), 
 		bAnyRegCurStateRef(false),
 		partitionBoundary(false),
-		inTrans(0),
-		numInTrans(0)
+		inConds(0),
+		numInConds(0)
 	{ }
 
 	/* Transitions out. */
 	RedTransList outSingle;
 	RedTransList outRange;
 	RedTransAp *defTrans;
-
-	/* For flat conditions. */
-	Key condLowKey, condHighKey;
-	GenCondSpace **condList;
 
 	/* For flat keys. */
 	Key lowKey, highKey;
@@ -431,8 +436,6 @@ struct RedStateAp
 	RedAction *eofAction;
 	RedTransAp *eofTrans;
 	int id;
-	GenStateCondList stateCondList;
-	StateCondVect stateCondVect;
 
 	/* Pointers for the list of states. */
 	RedStateAp *prev, *next;
@@ -443,8 +446,8 @@ struct RedStateAp
 	int partition;
 	bool partitionBoundary;
 
-	RedTransAp **inTrans;
-	int numInTrans;
+	RedCondAp **inConds;
+	int numInConds;
 };
 
 /* List of states. */
@@ -456,12 +459,15 @@ typedef BstSet< RedTransAp*, CmpOrd<RedTransAp*> > RedTransSet;
 /* Next version of the fsm machine. */
 struct RedFsmAp
 {
-	RedFsmAp();
+	RedFsmAp( KeyOps *keyOps );
+
+	KeyOps *keyOps;
 
 	bool forcedErrorState;
 
 	int nextActionId;
 	int nextTransId;
+	int nextCondId;
 
 	/* Next State Id doubles as the total number of state ids. */
 	int nextStateId;
@@ -474,6 +480,7 @@ struct RedFsmAp
 	RedStateAp *startState;
 	RedStateAp *errState;
 	RedTransAp *errTrans;
+	RedCondAp *errCond;
 	RedTransAp *errActionTrans;
 	RedStateAp *firstFinState;
 	int numFinStates;
@@ -492,7 +499,7 @@ struct RedFsmAp
 	bool bAnyRegNextStmt;
 	bool bAnyRegCurStateRef;
 	bool bAnyRegBreak;
-	bool bAnyConditions;
+	bool bUsingAct;
 
 	int maxState;
 	int maxSingleLen;
@@ -504,13 +511,9 @@ struct RedFsmAp
 	int maxActionLoc;
 	int maxActArrItem;
 	unsigned long long maxSpan;
-	unsigned long long maxCondSpan;
 	int maxFlatIndexOffset;
 	Key maxKey;
-	int maxCondOffset;
-	int maxCondLen;
 	int maxCondSpaceId;
-	int maxCondIndexOffset;
 	int maxCond;
 
 	bool anyActions();
@@ -527,7 +530,7 @@ struct RedFsmAp
 	bool anyRegNextStmt()           { return bAnyRegNextStmt; }
 	bool anyRegCurStateRef()        { return bAnyRegCurStateRef; }
 	bool anyRegBreak()              { return bAnyRegBreak; }
-	bool anyConditions()            { return bAnyConditions; }
+	bool usingAct()                 { return bUsingAct; }
 
 
 	/* Is is it possible to extend a range by bumping ranges that span only
@@ -579,19 +582,19 @@ struct RedFsmAp
 
 	void assignActionLocs();
 
+	RedCondAp *getErrorCond();
 	RedTransAp *getErrorTrans();
 	RedStateAp *getErrorState();
 
 	/* Is every char in the alphabet covered? */
 	bool alphabetCovered( RedTransList &outRange );
 
-	RedTransAp *allocateTrans( RedStateAp *targState, RedAction *actionTable );
+	RedTransAp *allocateTrans( GenCondSpace *condSpace );
 	RedCondAp *allocateCond( RedStateAp *targState, RedAction *actionTable );
 
 	void partitionFsm( int nParts );
 
 	void setInTrans();
 };
-
 
 #endif

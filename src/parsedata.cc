@@ -30,9 +30,9 @@
 #include "parsedata.h"
 #include "parsetree.h"
 #include "mergesort.h"
-#include "xmlcodegen.h"
 #include "version.h"
 #include "inputdata.h"
+#include "xml/xml.h"
 
 using namespace std;
 
@@ -104,7 +104,7 @@ Key makeFsmKeyHex( char *str, const InputLoc &loc, ParseData *pd )
 	 * an error, sets the return val to the upper or lower bound being tested
 	 * against. */
 	errno = 0;
-	unsigned int size = keyOps->alphType->size;
+	unsigned int size = pd->fsmCtx->keyOps->alphType->size;
 	bool unusedBits = size < sizeof(unsigned long);
 
 	unsigned long ul = strtoul( str, 0, 16 );
@@ -114,7 +114,7 @@ Key makeFsmKeyHex( char *str, const InputLoc &loc, ParseData *pd )
 		ul = 1 << (size * 8);
 	}
 
-	if ( unusedBits && keyOps->alphType->isSigned && ul >> (size * 8 - 1) )
+	if ( unusedBits && pd->fsmCtx->keyOps->alphType->isSigned && ul >> (size * 8 - 1) )
 		ul |= ( -1L >> (size*8) ) << (size*8);
 
 	return Key( (long)ul );
@@ -125,8 +125,8 @@ Key makeFsmKeyDec( char *str, const InputLoc &loc, ParseData *pd )
 	/* Convert the number to a decimal. First reset errno so we can check
 	 * for overflow or underflow. */
 	errno = 0;
-	long long minVal = keyOps->alphType->minVal;
-	long long maxVal = keyOps->alphType->maxVal;
+	long long minVal = pd->fsmCtx->keyOps->alphType->minVal;
+	long long maxVal = pd->fsmCtx->keyOps->alphType->maxVal;
 
 	long long ll = strtoll( str, 0, 10 );
 
@@ -141,7 +141,7 @@ Key makeFsmKeyDec( char *str, const InputLoc &loc, ParseData *pd )
 		ll = maxVal;
 	}
 
-	if ( keyOps->alphType->isSigned )
+	if ( pd->fsmCtx->keyOps->alphType->isSigned )
 		return Key( (long)ll );
 	else
 		return Key( (unsigned long)ll );
@@ -164,7 +164,7 @@ Key makeFsmKeyNum( char *str, const InputLoc &loc, ParseData *pd )
  * alphabet. */
 Key makeFsmKeyChar( char c, ParseData *pd )
 {
-	if ( keyOps->isSigned ) {
+	if ( pd->fsmCtx->keyOps->isSigned ) {
 		/* Copy from a char type. */
 		return Key( c );
 	}
@@ -179,7 +179,7 @@ Key makeFsmKeyChar( char c, ParseData *pd )
  * property of the alphabet. */
 void makeFsmKeyArray( Key *result, char *data, int len, ParseData *pd )
 {
-	if ( keyOps->isSigned ) {
+	if ( pd->fsmCtx->keyOps->isSigned ) {
 		/* Copy from a char star type. */
 		char *src = data;
 		for ( int i = 0; i < len; i++ )
@@ -199,7 +199,7 @@ void makeFsmUniqueKeyArray( KeySet &result, char *data, int len,
 		bool caseInsensitive, ParseData *pd )
 {
 	/* Use a transitions list for getting unique keys. */
-	if ( keyOps->isSigned ) {
+	if ( pd->fsmCtx->keyOps->isSigned ) {
 		/* Copy from a char star type. */
 		char *src = data;
 		for ( int si = 0; si < len; si++ ) {
@@ -231,15 +231,15 @@ void makeFsmUniqueKeyArray( KeySet &result, char *data, int len,
 
 FsmAp *dotFsm( ParseData *pd )
 {
-	FsmAp *retFsm = new FsmAp();
-	retFsm->rangeFsm( keyOps->minKey, keyOps->maxKey );
+	FsmAp *retFsm = new FsmAp( pd->fsmCtx );
+	retFsm->rangeFsm( pd->fsmCtx->keyOps->minKey, pd->fsmCtx->keyOps->maxKey );
 	return retFsm;
 }
 
 FsmAp *dotStarFsm( ParseData *pd )
 {
-	FsmAp *retFsm = new FsmAp();
-	retFsm->rangeStarFsm( keyOps->minKey, keyOps->maxKey );
+	FsmAp *retFsm = new FsmAp( pd->fsmCtx );
+	retFsm->rangeStarFsm( pd->fsmCtx->keyOps->minKey, pd->fsmCtx->keyOps->maxKey );
 	return retFsm;
 }
 
@@ -248,7 +248,7 @@ FsmAp *makeBuiltin( BuiltinMachine builtin, ParseData *pd )
 {
 	/* FsmAp created to return. */
 	FsmAp *retFsm = 0;
-	bool isSigned = keyOps->isSigned;
+	bool isSigned = pd->fsmCtx->keyOps->isSigned;
 
 	switch ( builtin ) {
 	case BT_Any: {
@@ -258,7 +258,7 @@ FsmAp *makeBuiltin( BuiltinMachine builtin, ParseData *pd )
 	}
 	case BT_Ascii: {
 		/* Ascii characters 0 to 127. */
-		retFsm = new FsmAp();
+		retFsm = new FsmAp( pd->fsmCtx );
 		retFsm->rangeFsm( 0, 127 );
 		break;
 	}
@@ -267,18 +267,18 @@ FsmAp *makeBuiltin( BuiltinMachine builtin, ParseData *pd )
 		 * on signed, vs no signed. If the alphabet is one byte then just use
 		 * dot fsm. */
 		if ( isSigned ) {
-			retFsm = new FsmAp();
+			retFsm = new FsmAp( pd->fsmCtx );
 			retFsm->rangeFsm( -128, 127 );
 		}
 		else {
-			retFsm = new FsmAp();
+			retFsm = new FsmAp( pd->fsmCtx );
 			retFsm->rangeFsm( 0, 255 );
 		}
 		break;
 	}
 	case BT_Alpha: {
 		/* Alpha [A-Za-z]. */
-		FsmAp *upper = new FsmAp(), *lower = new FsmAp();
+		FsmAp *upper = new FsmAp( pd->fsmCtx ), *lower = new FsmAp( pd->fsmCtx );
 		upper->rangeFsm( 'A', 'Z' );
 		lower->rangeFsm( 'a', 'z' );
 		upper->unionOp( lower );
@@ -288,14 +288,14 @@ FsmAp *makeBuiltin( BuiltinMachine builtin, ParseData *pd )
 	}
 	case BT_Digit: {
 		/* Digits [0-9]. */
-		retFsm = new FsmAp();
+		retFsm = new FsmAp( pd->fsmCtx );
 		retFsm->rangeFsm( '0', '9' );
 		break;
 	}
 	case BT_Alnum: {
 		/* Alpha numerics [0-9A-Za-z]. */
-		FsmAp *digit = new FsmAp(), *lower = new FsmAp();
-		FsmAp *upper = new FsmAp();
+		FsmAp *digit = new FsmAp( pd->fsmCtx ), *lower = new FsmAp( pd->fsmCtx );
+		FsmAp *upper = new FsmAp( pd->fsmCtx );
 		digit->rangeFsm( '0', '9' );
 		upper->rangeFsm( 'A', 'Z' );
 		lower->rangeFsm( 'a', 'z' );
@@ -307,20 +307,20 @@ FsmAp *makeBuiltin( BuiltinMachine builtin, ParseData *pd )
 	}
 	case BT_Lower: {
 		/* Lower case characters. */
-		retFsm = new FsmAp();
+		retFsm = new FsmAp( pd->fsmCtx );
 		retFsm->rangeFsm( 'a', 'z' );
 		break;
 	}
 	case BT_Upper: {
 		/* Upper case characters. */
-		retFsm = new FsmAp();
+		retFsm = new FsmAp( pd->fsmCtx );
 		retFsm->rangeFsm( 'A', 'Z' );
 		break;
 	}
 	case BT_Cntrl: {
 		/* Control characters. */
-		FsmAp *cntrl = new FsmAp();
-		FsmAp *highChar = new FsmAp();
+		FsmAp *cntrl = new FsmAp( pd->fsmCtx );
+		FsmAp *highChar = new FsmAp( pd->fsmCtx );
 		cntrl->rangeFsm( 0, 31 );
 		highChar->concatFsm( 127 );
 		cntrl->unionOp( highChar );
@@ -330,22 +330,22 @@ FsmAp *makeBuiltin( BuiltinMachine builtin, ParseData *pd )
 	}
 	case BT_Graph: {
 		/* Graphical ascii characters [!-~]. */
-		retFsm = new FsmAp();
+		retFsm = new FsmAp( pd->fsmCtx );
 		retFsm->rangeFsm( '!', '~' );
 		break;
 	}
 	case BT_Print: {
 		/* Printable characters. Same as graph except includes space. */
-		retFsm = new FsmAp();
+		retFsm = new FsmAp( pd->fsmCtx );
 		retFsm->rangeFsm( ' ', '~' );
 		break;
 	}
 	case BT_Punct: {
 		/* Punctuation. */
-		FsmAp *range1 = new FsmAp();
-		FsmAp *range2 = new FsmAp();
-		FsmAp *range3 = new FsmAp(); 
-		FsmAp *range4 = new FsmAp();
+		FsmAp *range1 = new FsmAp( pd->fsmCtx );
+		FsmAp *range2 = new FsmAp( pd->fsmCtx );
+		FsmAp *range3 = new FsmAp( pd->fsmCtx ); 
+		FsmAp *range4 = new FsmAp( pd->fsmCtx );
 		range1->rangeFsm( '!', '/' );
 		range2->rangeFsm( ':', '@' );
 		range3->rangeFsm( '[', '`' );
@@ -359,8 +359,8 @@ FsmAp *makeBuiltin( BuiltinMachine builtin, ParseData *pd )
 	}
 	case BT_Space: {
 		/* Whitespace: [\t\v\f\n\r ]. */
-		FsmAp *cntrl = new FsmAp();
-		FsmAp *space = new FsmAp();
+		FsmAp *cntrl = new FsmAp( pd->fsmCtx );
+		FsmAp *space = new FsmAp( pd->fsmCtx );
 		cntrl->rangeFsm( '\t', '\r' );
 		space->concatFsm( ' ' );
 		cntrl->unionOp( space );
@@ -370,9 +370,9 @@ FsmAp *makeBuiltin( BuiltinMachine builtin, ParseData *pd )
 	}
 	case BT_Xdigit: {
 		/* Hex digits [0-9A-Fa-f]. */
-		FsmAp *digit = new FsmAp();
-		FsmAp *upper = new FsmAp();
-		FsmAp *lower = new FsmAp();
+		FsmAp *digit = new FsmAp( pd->fsmCtx );
+		FsmAp *upper = new FsmAp( pd->fsmCtx );
+		FsmAp *lower = new FsmAp( pd->fsmCtx );
 		digit->rangeFsm( '0', '9' );
 		upper->rangeFsm( 'A', 'F' );
 		lower->rangeFsm( 'a', 'f' );
@@ -383,12 +383,12 @@ FsmAp *makeBuiltin( BuiltinMachine builtin, ParseData *pd )
 		break;
 	}
 	case BT_Lambda: {
-		retFsm = new FsmAp();
+		retFsm = new FsmAp( pd->fsmCtx );
 		retFsm->lambdaFsm();
 		break;
 	}
 	case BT_Empty: {
-		retFsm = new FsmAp();
+		retFsm = new FsmAp( pd->fsmCtx );
 		retFsm->emptyFsm();
 		break;
 	}}
@@ -461,6 +461,8 @@ ParseData::ParseData( const char *fileName, char *sectionName,
 	 * beginning of a machine spec so any assignment operators can reference
 	 * the builtins. */
 	initGraphDict();
+
+	fsmCtx = new FsmCtx;
 }
 
 /* Clean up the data collected during a parse. */
@@ -911,15 +913,13 @@ void ParseData::initKeyOps( )
 {
 	/* Signedness and bounds. */
 	HostType *alphType = alphTypeSet ? userAlphType : hostLang->defaultAlphType;
-	thisKeyOps.setAlphType( alphType );
+	fsmCtx->keyOps->setAlphType( alphType );
 
 	if ( lowerNum != 0 ) {
 		/* If ranges are given then interpret the alphabet type. */
-		thisKeyOps.minKey = makeFsmKeyNum( lowerNum, rangeLowLoc, this );
-		thisKeyOps.maxKey = makeFsmKeyNum( upperNum, rangeHighLoc, this );
+		fsmCtx->keyOps->minKey = makeFsmKeyNum( lowerNum, rangeLowLoc, this );
+		fsmCtx->keyOps->maxKey = makeFsmKeyNum( upperNum, rangeHighLoc, this );
 	}
-
-	thisCondData.lastCondKey = thisKeyOps.maxKey;
 }
 
 void ParseData::printNameInst( NameInst *nameInst, int level )
@@ -958,8 +958,10 @@ void ParseData::removeActionDups( FsmAp *graph )
 	/* Loop all states. */
 	for ( StateList::Iter state = graph->stateList; state.lte(); state++ ) {
 		/* Loop all transitions. */
-		for ( TransList::Iter trans = state->outList; trans.lte(); trans++ )
-			removeDups( trans->ctList.head->actionTable );
+		for ( TransList::Iter trans = state->outList; trans.lte(); trans++ ) {
+			for ( CondList::Iter cond = trans->condList; cond.lte(); cond++ )
+				removeDups( cond->actionTable );
+		}
 		removeDups( state->toStateActionTable );
 		removeDups( state->fromStateActionTable );
 		removeDups( state->eofActionTable );
@@ -1036,9 +1038,9 @@ void ParseData::setLongestMatchData( FsmAp *graph )
 		StateSet states;
 		for ( StateList::Iter state = graph->stateList; state.lte(); state++ ) {
 			for ( TransList::Iter trans = state->outList; trans.lte(); trans++ ) {
-				for ( ActionTable::Iter ati = trans->ctList.head->actionTable; ati.lte(); ati++ ) {
-					if ( ati->value->anyCall && trans->ctList.head->toState != 0 )
-						states.insert( trans->ctList.head->toState );
+				for ( ActionTable::Iter ati = trans->condList.head->actionTable; ati.lte(); ati++ ) {
+					if ( ati->value->anyCall && trans->condList.head->toState != 0 )
+						states.insert( trans->condList.head->toState );
 				}
 			}
 		}
@@ -1288,8 +1290,15 @@ void ParseData::analyzeGraph( FsmAp *graph )
 	for ( StateList::Iter st = graph->stateList; st.lte(); st++ ) {
 		/* The transition list. */
 		for ( TransList::Iter trans = st->outList; trans.lte(); trans++ ) {
-			for ( ActionTable::Iter at = trans->ctList.head->actionTable; at.lte(); at++ )
-				at->value->numTransRefs += 1;
+			if ( trans->condSpace != 0 ) {
+				for ( CondSet::Iter sci = trans->condSpace->condSet; sci.lte(); sci++ )
+					(*sci)->numCondRefs += 1;
+			}
+
+			for ( CondList::Iter cond = trans->condList; cond.lte(); cond++ ) { 
+				for ( ActionTable::Iter at = cond->actionTable; at.lte(); at++ )
+					at->value->numTransRefs += 1;
+			}
 		}
 
 		for ( ActionTable::Iter at = st->toStateActionTable; at.lte(); at++ )
@@ -1300,11 +1309,6 @@ void ParseData::analyzeGraph( FsmAp *graph )
 
 		for ( ActionTable::Iter at = st->eofActionTable; at.lte(); at++ )
 			at->value->numEofRefs += 1;
-
-		for ( StateCondList::Iter sc = st->stateCondList; sc.lte(); sc++ ) {
-			for ( CondSet::Iter sci = sc->condSpace->condSet; sci.lte(); sci++ )
-				(*sci)->numCondRefs += 1;
-		}
 	}
 
 	/* Checks for bad usage of directives in action code. */
@@ -1360,33 +1364,8 @@ void ParseData::makeExports()
 
 }
 
-/* Construct the machine and catch failures which can occur during
- * construction. */
 void ParseData::prepareMachineGen( GraphDictEl *graphDictEl )
 {
-	try {
-		/* This machine construction can fail. */
-		prepareMachineGenTBWrapped( graphDictEl );
-	}
-	catch ( FsmConstructFail fail ) {
-		switch ( fail.reason ) {
-			case FsmConstructFail::CondNoKeySpace: {
-				InputLoc &loc = alphTypeSet ? alphTypeLoc : sectionLoc;
-				error(loc) << "sorry, no more characters are "
-						"available in the alphabet space" << endl;
-				error(loc) << "  for conditions, please use a "
-						"smaller alphtype or reduce" << endl;
-				error(loc) << "  the span of characters on which "
-						"conditions are embedded" << endl;
-				break;
-			}
-		}
-	}
-}
-
-void ParseData::prepareMachineGenTBWrapped( GraphDictEl *graphDictEl )
-{
-	beginProcessing();
 	initKeyOps();
 	makeRootNames();
 	initLongestMatchData();
@@ -1428,16 +1407,15 @@ void ParseData::prepareMachineGenTBWrapped( GraphDictEl *graphDictEl )
 	sectionGraph->setStateNumbers( 0 );
 }
 
-CodeGenData *makeCodeGen2( const CodeGenArgs &args );
+CodeGenData *makeCodeGen( const CodeGenArgs &args );
 
 void ParseData::generateReduced( InputData &inputData )
 {
-	beginProcessing();
-
-	CodeGenArgs args( inputData, inputData.inputFileName, sectionName, this, sectionGraph, *inputData.outStream );
+	CodeGenArgs args( inputData, inputData.inputFileName,
+			sectionName, this, sectionGraph, *inputData.outStream );
 
 	/* Write out with it. */
-	cgd = makeCodeGen2( args );
+	cgd = makeCodeGen( args );
 
 	cgd->make();
 
@@ -1450,8 +1428,6 @@ void ParseData::generateReduced( InputData &inputData )
 
 void ParseData::generateXML( ostream &out )
 {
-	beginProcessing();
-
 	/* Make the generator. */
 	XMLCodeGen codeGen( sectionName, this, sectionGraph, out );
 

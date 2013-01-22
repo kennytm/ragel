@@ -40,8 +40,6 @@
 #include "avlmap.h"
 #include "ragel.h"
 
-#define LOG_CONDS 1
-
 /* Flags that control merging. */
 #define STB_GRAPH1     0x01
 #define STB_GRAPH2     0x02
@@ -59,6 +57,7 @@ struct Action;
 struct LongestMatchPart;
 struct LengthDef;
 struct CondSpace;
+struct FsmCtx;
 
 /* State list element for unambiguous access to list element. */
 struct FsmListEl 
@@ -80,8 +79,6 @@ private:
 	int numStates;
 	bool *array;
 };
-
-extern KeyOps *keyOps;
 
 /* Transistion Action Element. */
 typedef SBstMapEl< int, Action* > ActionTableEl;
@@ -456,7 +453,7 @@ struct CondAp
 	CondAp *ilprev, *ilnext;
 };
 
-typedef DList<CondAp> CondTransList;
+typedef DList<CondAp> CondList;
 
 /* Transition class that implements actions and priorities. */
 struct TransAp 
@@ -469,15 +466,17 @@ struct TransAp
 		lowKey(other.lowKey),
 		highKey(other.highKey),
 		condSpace(other.condSpace),
-		ctList()
+		condList()
 	{
 	}
 
 	~TransAp()
 	{
-	//	delete ctList.head;
-	//	ctList.abandon();
+		//	delete condList.head;
+		//	condList.abandon();
 	}
+
+	long condFullSize();
 
 	Key lowKey, highKey;
 
@@ -485,7 +484,7 @@ struct TransAp
 	CondSpace *condSpace;
 
 	/* Cond trans list. */
-	CondTransList ctList;
+	CondList condList;
 
 	/* Pointers for outlist. */
 	TransAp *prev, *next;
@@ -542,11 +541,16 @@ struct TransEl
 
 struct CmpKey
 {
-	static int compare( const Key key1, const Key key2 )
+	CmpKey()
+		: keyOps(0) {}
+
+	KeyOps *keyOps;
+
+	int compare( const Key key1, const Key key2 )
 	{
-		if ( key1 < key2 )
+		if ( keyOps->lt( key1, key2 ) )
 			return -1;
-		else if ( key1 > key2 )
+		else if ( keyOps->gt( key1, key2 ) )
 			return 1;
 		else
 			return 0;
@@ -554,7 +558,15 @@ struct CmpKey
 };
 
 /* Vector based set of key items. */
-typedef BstSet<Key, CmpKey> KeySet;
+struct KeySet
+: 
+	public BstSet<Key, CmpKey>
+{
+	KeySet( KeyOps *keyOps )
+	{
+		CmpKey::keyOps = keyOps;
+	}
+};
 
 struct MinPartition 
 {
@@ -629,8 +641,10 @@ struct CondSpace
 	
 	const CondSet &getKey() { return condSet; }
 
+	long fullSize()
+		{ return ( 1 << condSet.length() ); }
+
 	CondSet condSet;
-	Key baseKey;
 	long condSpaceId;
 };
 
@@ -638,80 +652,26 @@ typedef Vector<CondSpace*> CondSpaceVect;
 
 typedef AvlTree<CondSpace, CondSet, CmpCondSet> CondSpaceMap;
 
-struct StateCond
-{
-	StateCond( Key lowKey, Key highKey ) :
-		lowKey(lowKey), highKey(highKey) {}
-
-	Key lowKey;
-	Key highKey;
-	CondSpace *condSpace;
-
-	StateCond *prev, *next;
-};
-
-typedef DList<StateCond> StateCondList;
 typedef Vector<long> LongVect;
-
-struct Expansion
-{
-	Expansion( Key lowKey, Key highKey ) :
-		lowKey(lowKey), highKey(highKey),
-		fromTrans(0), fromCondSpace(0), 
-		toCondSpace(0) {}
-	
-	~Expansion()
-	{
-		if ( fromTrans != 0 )
-			delete fromTrans;
-	}
-
-	Key lowKey;
-	Key highKey;
-
-	TransAp *fromTrans;
-	CondSpace *fromCondSpace;
-	long fromVals;
-
-	CondSpace *toCondSpace;
-	LongVect toValsList;
-
-	Expansion *prev, *next;
-};
-
-typedef DList<Expansion> ExpansionList;
-
-struct Removal
-{
-	Key lowKey;
-	Key highKey;
-
-	Removal *next;
-};
 
 struct CondData
 {
-	CondData() : lastCondKey(0) {}
-
-	/* Condition info. */
-	Key lastCondKey;
-
 	CondSpaceMap condSpaceMap;
 };
 
-extern CondData *condData;
-
-struct FsmConstructFail
+/* All FSM operations must be between machines that point to the same context
+ * structure. */
+struct FsmCtx
 {
-	enum Reason
-	{
-		CondNoKeySpace
-	};
+	FsmCtx() {
+		keyOps = new KeyOps;
+		condData = new CondData;
+	}
 
-	FsmConstructFail( Reason reason ) 
-		: reason(reason) {}
-	Reason reason;
+	KeyOps *keyOps;
+	CondData *condData;
 };
+
 
 /* State class that implements actions and priorities. */
 struct StateAp 
@@ -738,9 +698,6 @@ struct StateAp
 
 	/* Epsilon transitions. */
 	EpsilonTrans epsilonTrans;
-
-	/* Condition info. */
-	StateCondList stateCondList;
 
 	/* Number of in transitions from states other than ourselves. */
 	int foreignInTrans;
@@ -1003,7 +960,7 @@ template <class ListItem1, class ListItem2 = ListItem1> struct RangePairIter
 		ExactOverlap,   End
 	};
 
-	RangePairIter( ListItem1 *list1, ListItem2 *list2 );
+	RangePairIter( FsmCtx *ctx, ListItem1 *list1, ListItem2 *list2 );
 
 	template <class ListItem> struct NextTrans
 	{
@@ -1038,6 +995,8 @@ template <class ListItem1, class ListItem2 = ListItem1> struct RangePairIter
 	void operator++(int) { findNext(); }
 	void operator++()    { findNext(); }
 
+	FsmCtx *ctx;
+
 	/* Iterator state. */
 	ListItem1 *list1;
 	ListItem2 *list2;
@@ -1056,8 +1015,9 @@ private:
 
 /* Init the iterator by advancing to the first item. */
 template <class ListItem1, class ListItem2> RangePairIter<ListItem1, ListItem2>::
-		RangePairIter( ListItem1 *list1, ListItem2 *list2 )
+		RangePairIter( FsmCtx *ctx, ListItem1 *list1, ListItem2 *list2 )
 :
+	ctx(ctx),
 	list1(list1),
 	list2(list2),
 	itState(Begin)
@@ -1118,24 +1078,24 @@ entryBegin:
 		/* Both state1's and state2's transition elements are good.
 		 * The signiture of no overlap is a back key being in front of a
 		 * front key. */
-		else if ( s1Tel.highKey < s2Tel.lowKey ) {
+		else if ( ctx->keyOps->lt( s1Tel.highKey, s2Tel.lowKey ) ) {
 			/* A range exists in state1 that does not overlap with state2. */
 			CO_RETURN2( OnlyInS1Range, RangeInS1 );
 			s1Tel.increment();
 		}
-		else if ( s2Tel.highKey < s1Tel.lowKey ) {
+		else if ( ctx->keyOps->lt( s2Tel.highKey, s1Tel.lowKey ) ) {
 			/* A range exists in state2 that does not overlap with state1. */
 			CO_RETURN2( OnlyInS2Range, RangeInS2 );
 			s2Tel.increment();
 		}
 		/* There is overlap, must mix the ranges in some way. */
-		else if ( s1Tel.lowKey < s2Tel.lowKey ) {
+		else if ( ctx->keyOps->lt( s1Tel.lowKey, s2Tel.lowKey ) ) {
 			/* Range from state1 sticks out front. Must break it into
 			 * non-overlaping and overlaping segments. */
 			bottomLow = s2Tel.lowKey;
 			bottomHigh = s1Tel.highKey;
 			s1Tel.highKey = s2Tel.lowKey;
-			s1Tel.highKey.decrement();
+			ctx->keyOps->decrement( s1Tel.highKey );
 			bottomTrans1 = s1Tel.trans;
 
 			/* Notify the caller that we are breaking s1. This gives them a
@@ -1150,13 +1110,13 @@ entryBegin:
 			s1Tel.highKey = bottomHigh;
 			s1Tel.trans = bottomTrans1;
 		}
-		else if ( s2Tel.lowKey < s1Tel.lowKey ) {
+		else if ( ctx->keyOps->lt( s2Tel.lowKey, s1Tel.lowKey ) ) {
 			/* Range from state2 sticks out front. Must break it into
 			 * non-overlaping and overlaping segments. */
 			bottomLow = s1Tel.lowKey;
 			bottomHigh = s2Tel.highKey;
 			s2Tel.highKey = s1Tel.lowKey;
-			s2Tel.highKey.decrement();
+			ctx->keyOps->decrement( s2Tel.highKey );
 			bottomTrans2 = s2Tel.trans;
 
 			/* Notify the caller that we are breaking s2. This gives them a
@@ -1172,12 +1132,12 @@ entryBegin:
 			s2Tel.trans = bottomTrans2;
 		}
 		/* Low ends are even. Are the high ends even? */
-		else if ( s1Tel.highKey < s2Tel.highKey ) {
+		else if ( ctx->keyOps->lt( s1Tel.highKey, s2Tel.highKey ) ) {
 			/* Range from state2 goes longer than the range from state1. We
 			 * must break the range from state2 into an evenly overlaping
 			 * segment. */
 			bottomLow = s1Tel.highKey;
-			bottomLow.increment();
+			ctx->keyOps->increment( bottomLow );
 			bottomHigh = s2Tel.highKey;
 			s2Tel.highKey = s1Tel.highKey;
 			bottomTrans2 = s2Tel.trans;
@@ -1197,12 +1157,12 @@ entryBegin:
 			/* Advance over the entire s1Tel. We have consumed it. */
 			s1Tel.increment();
 		}
-		else if ( s2Tel.highKey < s1Tel.highKey ) {
+		else if ( ctx->keyOps->lt( s2Tel.highKey, s1Tel.highKey ) ) {
 			/* Range from state1 goes longer than the range from state2. We
 			 * must break the range from state1 into an evenly overlaping
 			 * segment. */
 			bottomLow = s2Tel.highKey;
-			bottomLow.increment();
+			ctx->keyOps->increment( bottomLow );
 			bottomHigh = s1Tel.highKey;
 			s1Tel.highKey = s2Tel.highKey;
 			bottomTrans1 = s1Tel.trans;
@@ -1243,24 +1203,27 @@ typedef CmpTable< int, CmpOrd<int> > CmpEpsilonTrans;
 class ApproxCompare
 {
 public:
-	ApproxCompare() { }
+	ApproxCompare( FsmCtx *ctx = 0 ) : ctx(ctx) { }
 	int compare( const StateAp *pState1, const StateAp *pState2 );
+	FsmCtx *ctx;
 };
 
 /* Compare class for the initial partitioning of a partition minimization. */
 class InitPartitionCompare
 {
 public:
-	InitPartitionCompare() { }
+	InitPartitionCompare( FsmCtx *ctx = 0 ) : ctx(ctx) { }
 	int compare( const StateAp *pState1, const StateAp *pState2 );
+	FsmCtx *ctx;
 };
 
 /* Compare class for the regular partitioning of a partition minimization. */
 class PartitionCompare
 {
 public:
-	PartitionCompare() { }
+	PartitionCompare( FsmCtx *ctx = 0 ) : ctx(ctx) { }
 	int compare( const StateAp *pState1, const StateAp *pState2 );
+	FsmCtx *ctx;
 };
 
 /* Compare class for a minimization that marks pairs. Provides the shouldMark
@@ -1268,9 +1231,10 @@ public:
 class MarkCompare
 {
 public:
-	MarkCompare() { }
+	MarkCompare( FsmCtx *ctx ) : ctx(ctx) { }
 	bool shouldMark( MarkIndex &markIndex, const StateAp *pState1, 
 			const StateAp *pState2 );
+	FsmCtx *ctx;
 };
 
 /* List of partitions. */
@@ -1289,9 +1253,11 @@ typedef Vector<EntryMapEl> EntryMapBase;
 struct FsmAp 
 {
 	/* Constructors/Destructors. */
-	FsmAp( );
+	FsmAp( FsmCtx *ctx );
 	FsmAp( const FsmAp &graph );
 	~FsmAp();
+
+	FsmCtx *ctx;
 
 	/* The list of states. */
 	StateList stateList;
@@ -1347,9 +1313,6 @@ struct FsmAp
 	/* Set conditions. */
 	CondSpace *addCondSpace( const CondSet &condSet );
 
-	void expansionTrans( Expansion *expansion, TransAp *src );
-	void findEmbedExpansions( ExpansionList &expansionList, 
-		StateAp *destState, Action *condAction, bool sense );
 	void embedCondition( MergeData &md, StateAp *state, Action *condAction, bool sense );
 	void embedCondition( StateAp *state, Action *condAction, bool sense );
 
@@ -1437,6 +1400,8 @@ struct FsmAp
 	/* Attach with a new transition. */
 	TransAp *attachNewTrans( StateAp *from, StateAp *to,
 			Key onChar1, Key onChar2 );
+	CondAp *attachNewTrans( TransAp *trans, StateAp *from,
+			StateAp *to, CondKey onChar );
 
 	/* Attach with an existing transition that already in an out list. */
 	void attachTrans( StateAp *from, StateAp *to, TransAp *trans );
@@ -1464,7 +1429,7 @@ struct FsmAp
 	CondAp *fsmAttachStates( MergeData &md, StateAp *from,
 			CondAp *destTrans, CondAp *srcTrans );
 
-	void expandConds( StateAp *fromState, TransAp *trans, const CondSet &origSet, const CondSet &mergedCS, bool attach );
+	void expandConds( StateAp *fromState, TransAp *trans, const CondSet &origSet, const CondSet &mergedCS );
 	void expandCondTransitions( StateAp *fromState, TransAp *destTrans, TransAp *srcTrans );
 	TransAp *copyTransForExpanision( StateAp *fromState, TransAp *srcTrans );
 	void freeEffectiveTrans( TransAp *srcTrans );
@@ -1484,17 +1449,6 @@ struct FsmAp
 			TransAp *destParent, CondAp *destTrans, CondAp *srcTrans );
 
 	void outTransCopy( MergeData &md, StateAp *dest, TransAp *srcList );
-
-	void doRemove( MergeData &md, StateAp *destState, ExpansionList &expList1 );
-	void doExpand( MergeData &md, StateAp *destState, ExpansionList &expList1 );
-	void findCondExpInTrans( ExpansionList &expansionList, StateAp *state, 
-			Key lowKey, Key highKey, CondSpace *fromCondSpace, CondSpace *toCondSpace,
-			long destVals, LongVect &toValsList );
-	void findTransExpansions( ExpansionList &expansionList, 
-			StateAp *destState, StateAp *srcState );
-	void findCondExpansions( ExpansionList &expansionList, 
-			StateAp *destState, StateAp *srcState );
-	void mergeStateConds( StateAp *destState, StateAp *srcState );
 
 	/* Merge a set of states into newState. */
 	void mergeStates( MergeData &md, StateAp *destState, 

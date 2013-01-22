@@ -228,7 +228,6 @@ struct ParseData
 	void makeExports();
 
 	void prepareMachineGen( GraphDictEl *graphDictEl );
-	void prepareMachineGenTBWrapped( GraphDictEl *graphDictEl );
 	void generateXML( ostream &out );
 	void generateReduced( InputData &inputData );
 	FsmAp *sectionGraph;
@@ -358,19 +357,13 @@ struct ParseData
 	Action *setTokEnd;
 	int setTokEndOrd;
 
-	void beginProcessing()
-	{
-		::condData = &thisCondData;
-		::keyOps = &thisKeyOps;
-	}
-
-	CondData thisCondData;
-	KeyOps thisKeyOps;
+	FsmCtx *fsmCtx;
 
 	ExportList exportList;
 	LengthDefList lengthDefList;
 
 	CodeGenData *cgd;
+
 };
 
 void afterOpMinimize( FsmAp *fsm, bool lastInSeq = true );

@@ -90,6 +90,7 @@ struct GenBase
 	char *fsmName;
 	ParseData *pd;
 	FsmAp *fsm;
+	KeyOps *keyOps;
 
 	ActionTableMap actionTableMap;
 	int nextActionTableId;
@@ -114,7 +115,8 @@ struct FsmAp;
 typedef AvlMap<char *, CodeGenData*, CmpStr> CodeGenMap;
 typedef AvlMapEl<char *, CodeGenData*> CodeGenMapEl;
 
-void cdLineDirective( ostream &out, const char *fileName, int line );
+void cLineDirective( ostream &out, const char *fileName, int line );
+void dLineDirective( ostream &out, const char *fileName, int line );
 void javaLineDirective( ostream &out, const char *fileName, int line );
 void goLineDirective( ostream &out, const char *fileName, int line );
 void rubyLineDirective( ostream &out, const char *fileName, int line );
@@ -128,11 +130,35 @@ string itoa( int i );
 CodeGenData *makeCodeGen( InputData &inputData, char *fsmName, ParseData *pd, FsmAp *fsm );
 struct CodeGenArgs;
 
-class ReducedGen : protected GenBase
+
+/*********************************/
+
+struct CodeGenArgs
+{
+	CodeGenArgs( InputData &inputData, const char *sourceFileName, 
+			char *fsmName, ParseData *pd, FsmAp *fsm, std::ostream &out )
+	:
+		inputData(inputData),
+		sourceFileName(sourceFileName),
+		fsmName(fsmName),
+		pd(pd),
+		fsm(fsm),
+		out(out)
+	{}
+
+	InputData &inputData;
+	const char *sourceFileName;
+	char *fsmName;
+	ParseData *pd;
+	FsmAp *fsm;
+	std::ostream &out;
+};
+
+struct CodeGenData : protected GenBase
 {
 public:
-	ReducedGen( const CodeGenArgs &args );
-	CodeGenData *make();
+	CodeGenData( const CodeGenArgs &args );
+	void make();
 
 private:
 	void makeGenInlineList( GenInlineList *outList, InlineList *inList );
@@ -161,57 +187,24 @@ private:
 
 	void makeStateActions( StateAp *state );
 	void makeEofTrans( StateAp *state );
-	void makeStateConditions( StateAp *state );
 	void makeTransList( StateAp *state );
 	void makeTrans( Key lowKey, Key highKey, TransAp *trans );
-
-	void finishGen();
-
 
 	/* Collected during parsing. */
 	int curAction;
 	int curActionTable;
 	int curTrans;
 	int curState;
-	int curCondSpace;
-	int curStateCond;
 
-protected:
-	CodeGenData *cgd;
-};
+public:
 
-
-/*********************************/
-
-struct CodeGenArgs
-{
-	CodeGenArgs( InputData &inputData, const char *sourceFileName, 
-			char *fsmName, ParseData *pd, FsmAp *fsm, std::ostream &out )
-	:
-		inputData(inputData),
-		sourceFileName(sourceFileName),
-		fsmName(fsmName),
-		pd(pd),
-		fsm(fsm),
-		out(out)
-	{}
-
-	InputData &inputData;
-	const char *sourceFileName;
-	char *fsmName;
-	ParseData *pd;
-	FsmAp *fsm;
-	std::ostream &out;
-};
-
-struct CodeGenData : public ReducedGen
-{
 	/*
 	 * The interface to the code generator.
 	 */
-	virtual void finishRagelDef() {}
+	virtual void genAnalysis() = 0;
 
-	/* These are invoked by the corresponding write statements. */
+	/* These are invoked by writeStatement and are normally what are used to
+	 * implement the code generators. */
 	virtual void writeData() {};
 	virtual void writeInit() {};
 	virtual void writeExec() {};
@@ -220,13 +213,11 @@ struct CodeGenData : public ReducedGen
 	virtual void writeFirstFinal() {};
 	virtual void writeError() {};
 
-	/* This can also be overwridden to modify the processing of write
+	/* This can also be overridden to modify the processing of write
 	 * statements. */
 	virtual void writeStatement( InputLoc &loc, int nargs, char **args );
 
 	/********************/
-
-	CodeGenData( const CodeGenArgs &args );
 
 	virtual ~CodeGenData() {}
 
@@ -290,12 +281,10 @@ struct CodeGenData : public ReducedGen
 	void setId( int snum, int id );
 	void setFinal( int snum );
 	void initTransList( int snum, unsigned long length );
-	void newTrans( int snum, int tnum,
-			Key lowKey, Key highKey, 
-			long targ, long act );
+	void newTrans( int snum, int tnum, Key lowKey, Key highKey,
+			GenCondSpace *gcs, RedCondList &outConds );
 	void newCondTrans( RedCondList &outConds, 
-			int snum, int tnum, CondKey key, 
-			long targ, long act );
+			int snum, CondKey key, long targ, long act );
 	void finishTransList( int snum );
 	void setStateActions( int snum, long toStateAction, 
 			long fromStateAction, long eofAction );
@@ -303,16 +292,11 @@ struct CodeGenData : public ReducedGen
 	void setForcedErrorState()
 		{ redFsm->forcedErrorState = true; }
 
-	
-	void initCondSpaceList( ulong length );
 	void condSpaceItem( int cnum, long condActionId );
-	void newCondSpace( int cnum, int condSpaceId, Key baseKey );
+	void newCondSpace( int cnum, int condSpaceId );
 
 	void initStateCondList( int snum, ulong length );
 	void addStateCond( int snum, Key lowKey, Key highKey, long condNum );
-
-	GenCondSpace *findCondSpace( Key lowKey, Key highKey );
-	Condition *findCondition( Key key );
 
 	bool setAlphType( const char *data );
 
@@ -322,10 +306,13 @@ struct CodeGenData : public ReducedGen
 	/* Gather various info on the machine. */
 	void analyzeActionList( RedAction *redAct, GenInlineList *inlineList );
 	void analyzeAction( GenAction *act, GenInlineList *inlineList );
+	void actionActionRefs( RedAction *action );
+	void transListActionRefs( RedTransList &list );
+	void transActionRefs( RedTransAp *trans );
 	void findFinalActionRefs();
 	void analyzeMachine();
 
-	void closeMachine();
+	void resolveTargetStates();
 	void setValueLimits();
 	void assignActionIds();
 

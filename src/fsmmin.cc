@@ -22,10 +22,37 @@
 #include "fsmgraph.h"
 #include "mergesort.h"
 
+struct MergeSortInitPartition
+	: public MergeSort<StateAp*, InitPartitionCompare>
+{
+	MergeSortInitPartition( FsmCtx *ctx )
+	{
+		InitPartitionCompare::ctx = ctx;
+	}
+};
+
+struct MergeSortPartition
+	: public MergeSort<StateAp*, PartitionCompare>
+{
+	MergeSortPartition( FsmCtx *ctx )
+	{
+		PartitionCompare::ctx = ctx;
+	}
+};
+
+struct MergeSortApprox
+	: public MergeSort<StateAp*, ApproxCompare>
+{
+	MergeSortApprox( FsmCtx *ctx )
+	{
+		ApproxCompare::ctx = ctx;
+	}
+};
+
 int FsmAp::partitionRound( StateAp **statePtrs, MinPartition *parts, int numParts )
 {
 	/* Need a mergesort object and a single partition compare. */
-	MergeSort<StateAp*, PartitionCompare> mergeSort;
+	MergeSortPartition mergeSort( ctx );
 	PartitionCompare partCompare;
 
 	/* For each partition. */
@@ -79,8 +106,8 @@ int FsmAp::partitionRound( StateAp **statePtrs, MinPartition *parts, int numPart
 void FsmAp::minimizePartition1()
 {
 	/* Need one mergesort object and partition compares. */
-	MergeSort<StateAp*, InitPartitionCompare> mergeSort;
-	InitPartitionCompare initPartCompare;
+	MergeSortInitPartition mergeSort( ctx );
+	InitPartitionCompare initPartCompare( ctx );
 
 	/* Nothing to do if there are no states. */
 	if ( stateList.length() == 0 )
@@ -153,8 +180,8 @@ void FsmAp::minimizePartition1()
 int FsmAp::splitCandidates( StateAp **statePtrs, MinPartition *parts, int numParts )
 {
 	/* Need a mergesort and a partition compare. */
-	MergeSort<StateAp*, PartitionCompare> mergeSort;
-	PartitionCompare partCompare;
+	MergeSortPartition mergeSort( ctx );
+	PartitionCompare partCompare( ctx );
 
 	/* The lists of unsplitable (partList) and splitable partitions. 
 	 * Only partitions in the splitable list are check for needing splitting. */
@@ -255,8 +282,7 @@ int FsmAp::splitCandidates( StateAp **statePtrs, MinPartition *parts, int numPar
 				/* Walk all transition into the state and put the partition
 				 * that the from state is in onto the splittable list. */
 				for ( TransInList<CondAp>::Iter t = state->inList; t.lte(); t++ ) {
-					TransAp *trans = t->transAp;
-					MinPartition *fromPart = trans->ctList.head->fromState->alg.partition;
+					MinPartition *fromPart = t->fromState->alg.partition;
 					if ( ! fromPart->active ) {
 						fromPart->active = true;
 						partList.detach( fromPart );
@@ -283,8 +309,8 @@ int FsmAp::splitCandidates( StateAp **statePtrs, MinPartition *parts, int numPar
 void FsmAp::minimizePartition2()
 {
 	/* Need a mergesort and an initial partition compare. */
-	MergeSort<StateAp*, InitPartitionCompare> mergeSort;
-	InitPartitionCompare initPartCompare;
+	MergeSortInitPartition mergeSort( ctx );
+	InitPartitionCompare initPartCompare( ctx );
 
 	/* Nothing to do if there are no states. */
 	if ( stateList.length() == 0 )
@@ -347,7 +373,7 @@ void FsmAp::initialMarkRound( MarkIndex &markIndex )
 	StateAp *p = stateList.head, *q;
 
 	/* Need an initial partition compare. */
-	InitPartitionCompare initPartCompare;
+	InitPartitionCompare initPartCompare( ctx );
 
 	/* Walk all unordered pairs of (p, q) where p != q.
 	 * The second depth of the walk stops before reaching p. This
@@ -374,7 +400,7 @@ bool FsmAp::markRound( MarkIndex &markIndex )
 	bool pairWasMarked = false;
 
 	/* Need a mark comparison. */
-	MarkCompare markCompare;
+	MarkCompare markCompare( ctx );
 
 	/* Walk all unordered pairs of (p, q) where p != q.
 	 * The second depth of the walk stops before reaching p. This
@@ -433,8 +459,8 @@ bool FsmAp::minimizeRound()
 		return false;
 
 	/* Need a mergesort on approx compare and an approx compare. */
-	MergeSort<StateAp*, ApproxCompare> mergeSort;
-	ApproxCompare approxCompare;
+	MergeSortApprox mergeSort( ctx );
+	ApproxCompare approxCompare( ctx );
 
 	/* Fill up an array of pointers to the states. */
 	StateAp **statePtrs = new StateAp*[stateList.length()];
@@ -530,7 +556,7 @@ bool FsmAp::outListCovers( StateAp *state )
 	
 	/* The first must start at the lower bound. */
 	TransList::Iter trans = state->outList.first();
-	if ( keyOps->minKey < trans->lowKey )
+	if ( ctx->keyOps->lt( ctx->keyOps->minKey, trans->lowKey ) )
 		return false;
 
 	/* Loop starts at second el. */
@@ -541,14 +567,14 @@ bool FsmAp::outListCovers( StateAp *state )
 		/* Lower end of the trans must be one greater than the
 		 * previous' high end. */
 		Key lowKey = trans->lowKey;
-		lowKey.decrement();
-		if ( trans->prev->highKey < lowKey )
+		ctx->keyOps->decrement( lowKey );
+		if ( ctx->keyOps->lt( trans->prev->highKey, lowKey ) )
 			return false;
 	}
 
 	/* Require that the last range extends to the upper bound. */
 	trans = state->outList.last();
-	if ( trans->highKey < keyOps->maxKey )
+	if ( ctx->keyOps->lt( trans->highKey, ctx->keyOps->maxKey ) )
 		return false;
 
 	return true;
@@ -712,22 +738,39 @@ void FsmAp::compressTransitions()
 		if ( st->outList.length() > 1 ) {
 			for ( TransList::Iter trans = st->outList, next = trans.next(); next.lte();  ) {
 				Key nextLow = next->lowKey;
-				nextLow.decrement();
+				ctx->keyOps->decrement( nextLow );
 
 				/* Require there be no conditions in either of the merge
 				 * candidates. */
-				bool merge = 
-					trans->condSpace == 0 && 
-					next->condSpace == 0 && 
-					trans->highKey == nextLow && 
-					trans->ctList.length() == 1 && next->ctList.length() == 1 &&
-					trans->ctList.head->toState == next->ctList.head->toState &&
-					CmpActionTable::compare( trans->ctList.head->actionTable, next->ctList.head->actionTable ) == 0;
+				bool merge = false;
+				if ( trans->condSpace == 0 && 
+						next->condSpace == 0 && 
+						ctx->keyOps->eq( trans->highKey, nextLow ) )
+				{
+					if ( trans->condSpace == 0 &&
+							next->condSpace == 0 )
+					{
+						assert( trans->condList.length() == 1 );
+						assert( next->condList.length() == 1 );
+
+						/* Check the condition target and action data. */
+						CondAp *cond = trans->condList.head;
+						CondAp *nextCond = next->condList.head;
+
+						if ( cond->toState == nextCond->toState &&
+								CmpActionTable::compare( cond->actionTable, 
+								nextCond->actionTable ) == 0 )
+						{
+							merge = true;
+						}
+					}
+				}
 
 				if ( merge ) {
 					trans->highKey = next->highKey;
 					st->outList.detach( next );
-					detachCondTrans( next->ctList.head->fromState, next->ctList.head->toState, next->ctList.head );
+					detachCondTrans( next->condList.head->fromState,
+							next->condList.head->toState, next->condList.head );
 					delete next;
 					next = trans.next();
 				}

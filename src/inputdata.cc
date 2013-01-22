@@ -25,7 +25,6 @@
 #include "parsedata.h"
 #include "rlparse.h"
 #include "rlscan.h"
-#include "dotcodegen.h"
 #include <iostream>
 
 using std::istream;
@@ -264,8 +263,6 @@ void InputData::writeOutput()
 	for ( InputItemList::Iter ii = inputItems; ii.lte(); ii++ ) {
 		if ( ii->type == InputItem::Write ) {
 			CodeGenData *cgd = ii->pd->cgd;
-			::keyOps = &cgd->thisKeyOps;
-
 			cgd->writeStatement( ii->loc, ii->writeArgs.length()-1, ii->writeArgs.data );
 		}
 		else {

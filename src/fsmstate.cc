@@ -19,12 +19,11 @@
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA 
  */
 
-#include <string.h>
-#include <assert.h>
 #include "fsmgraph.h"
 
+#include <string.h>
+#include <assert.h>
 #include <iostream>
-using namespace std;
 
 /* Construct a mark index for a specified number of states. Must new up
  * an array that is states^2 in size. */
@@ -83,9 +82,6 @@ StateAp::StateAp()
 	entryIds(),
 	epsilonTrans(),
 
-	/* Conditions. */
-	stateCondList(),
-
 	/* No transitions in from other states. */
 	foreignInTrans(0),
 
@@ -127,9 +123,6 @@ StateAp::StateAp(const StateAp &other)
 	entryIds(other.entryIds),
 	epsilonTrans(other.epsilonTrans),
 
-	/* Copy in the elements of the conditions. */
-	stateCondList( other.stateCondList ),
-
 	/* No transitions in from other states. */
 	foreignInTrans(0),
 
@@ -157,11 +150,11 @@ StateAp::StateAp(const StateAp &other)
 		 * be corrected once all the states have been created. */
 		TransAp *newTrans = new TransAp( *trans );
 
-		for ( CondTransList::Iter cti = trans->ctList; cti.lte(); cti++ ) {
+		for ( CondList::Iter cti = trans->condList; cti.lte(); cti++ ) {
 			CondAp *newCondTrans = new CondAp( *cti, newTrans );
 			newCondTrans->key = cti->key;
 
-			newTrans->ctList.append( newCondTrans );
+			newTrans->condList.append( newCondTrans );
 
 			assert( cti->lmActionTable.length() == 0 );
 
@@ -205,7 +198,7 @@ int ApproxCompare::compare( const StateAp *state1, const StateAp *state2 )
 		return compareRes;
 
 	/* Use a pair iterator to get the transition pairs. */
-	RangePairIter<TransAp> outPair( state1->outList.head, state2->outList.head );
+	RangePairIter<TransAp> outPair( ctx, state1->outList.head, state2->outList.head );
 	for ( ; !outPair.end(); outPair++ ) {
 		switch ( outPair.userState ) {
 
@@ -266,32 +259,8 @@ int InitPartitionCompare::compare( const StateAp *state1 , const StateAp *state2
 	if ( compareRes != 0 )
 		return compareRes;
 
-	/* Use a pair iterator to test the condition pairs. */
-	RangePairIter<StateCond> condPair( state1->stateCondList.head, state2->stateCondList.head );
-	for ( ; !condPair.end(); condPair++ ) {
-		switch ( condPair.userState ) {
-		case RangePairIter<StateCond>::RangeInS1:
-			return 1;
-		case RangePairIter<StateCond>::RangeInS2:
-			return -1;
-
-		case RangePairIter<StateCond>::RangeOverlap: {
-			CondSpace *condSpace1 = condPair.s1Tel.trans->condSpace;
-			CondSpace *condSpace2 = condPair.s2Tel.trans->condSpace;
-			if ( condSpace1 < condSpace2 )
-				return -1;
-			else if ( condSpace1 > condSpace2 )
-				return 1;
-			break;
-		}
-		case RangePairIter<StateCond>::BreakS1:
-		case RangePairIter<StateCond>::BreakS2:
-			break;
-		}
-	}
-
 	/* Use a pair iterator to test the transition pairs. */
-	RangePairIter<TransAp> outPair( state1->outList.head, state2->outList.head );
+	RangePairIter<TransAp> outPair( ctx, state1->outList.head, state2->outList.head );
 	for ( ; !outPair.end(); outPair++ ) {
 		switch ( outPair.userState ) {
 
@@ -329,7 +298,7 @@ int PartitionCompare::compare( const StateAp *state1, const StateAp *state2 )
 	int compareRes;
 
 	/* Use a pair iterator to get the transition pairs. */
-	RangePairIter<TransAp> outPair( state1->outList.head, state2->outList.head );
+	RangePairIter<TransAp> outPair( ctx, state1->outList.head, state2->outList.head );
 	for ( ; !outPair.end(); outPair++ ) {
 		switch ( outPair.userState ) {
 
@@ -379,7 +348,7 @@ bool MarkCompare::shouldMark( MarkIndex &markIndex, const StateAp *state1,
 			const StateAp *state2 )
 {
 	/* Use a pair iterator to get the transition pairs. */
-	RangePairIter<TransAp> outPair( state1->outList.head, state2->outList.head );
+	RangePairIter<TransAp> outPair( ctx, state1->outList.head, state2->outList.head );
 	for ( ; !outPair.end(); outPair++ ) {
 		switch ( outPair.userState ) {
 
@@ -415,7 +384,7 @@ bool MarkCompare::shouldMark( MarkIndex &markIndex, const StateAp *state1,
 int FsmAp::comparePart( TransAp *trans1, TransAp *trans2 )
 {
 	/* Use a pair iterator to get the transition pairs. */
-	ValPairIter<CondAp> outPair( trans1->ctList.head, trans2->ctList.head );
+	ValPairIter<CondAp> outPair( trans1->condList.head, trans2->condList.head );
 	for ( ; !outPair.end(); outPair++ ) {
 		switch ( outPair.userState ) {
 
@@ -519,7 +488,7 @@ int FsmAp::compareCondDataPtr( CondAp *trans1, CondAp *trans2 )
  * Does not consider from state. Either of the pointers may be null. */
 int FsmAp::compareFullPtr( TransAp *trans1, TransAp *trans2 )
 {
-	std::cout << "FIXME: " << __PRETTY_FUNCTION__ << std::endl;
+	std::cerr << "FIXME: " << __PRETTY_FUNCTION__ << std::endl;
 
 	if ( (trans1 != 0) ^ (trans2 != 0) ) {
 		/* Exactly one of the transitions is set. */
@@ -531,11 +500,11 @@ int FsmAp::compareFullPtr( TransAp *trans1, TransAp *trans2 )
 	else if ( trans1 != 0 ) {
 		/* Both of the transition pointers are set. Test target state,
 		 * priority and funcs. */
-		if ( trans1->ctList.head->toState < trans2->ctList.head->toState )
+		if ( trans1->condList.head->toState < trans2->condList.head->toState )
 			return -1;
-		else if ( trans1->ctList.head->toState > trans2->ctList.head->toState )
+		else if ( trans1->condList.head->toState > trans2->condList.head->toState )
 			return 1;
-		else if ( trans1->ctList.head->toState != 0 ) {
+		else if ( trans1->condList.head->toState != 0 ) {
 			/* Test transition data. */
 			int compareRes = compareTransData( trans1, trans2 );
 			if ( compareRes != 0 )
@@ -549,7 +518,7 @@ int FsmAp::compareFullPtr( TransAp *trans1, TransAp *trans2 )
 bool FsmAp::shouldMarkPtr( MarkIndex &markIndex, TransAp *trans1, 
 				TransAp *trans2 )
 {
-	std::cout << "FIXME: " << __PRETTY_FUNCTION__ << std::endl;
+	std::cerr << "FIXME: " << __PRETTY_FUNCTION__ << std::endl;
 
 	if ( (trans1 != 0) ^ (trans2 != 0) ) {
 		/* Exactly one of the transitions is set. The initial mark round
@@ -559,8 +528,8 @@ bool FsmAp::shouldMarkPtr( MarkIndex &markIndex, TransAp *trans1,
 	else if ( trans1 != 0 ) {
 		/* Both of the transitions are set. If the target pair is marked, then
 		 * the pair we are considering gets marked. */
-		return markIndex.isPairMarked( trans1->ctList.head->toState->alg.stateNum, 
-				trans2->ctList.head->toState->alg.stateNum );
+		return markIndex.isPairMarked( trans1->condList.head->toState->alg.stateNum, 
+				trans2->condList.head->toState->alg.stateNum );
 	}
 
 	/* Neither of the transitiosn are set. */

@@ -19,9 +19,12 @@
  *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA 
  */
 
+#include "fsmgraph.h"
+
 #include <string.h>
 #include <assert.h>
-#include "fsmgraph.h"
+#include <iostream>
+
 
 /* Simple singly linked list append routine for the fill list. The new state
  * goes to the end of the list. */
@@ -42,8 +45,10 @@ void MergeData::fillListAppend( StateAp *state )
 }
 
 /* Graph constructor. */
-FsmAp::FsmAp()
+FsmAp::FsmAp( FsmCtx *ctx )
 :
+	ctx( ctx ),
+
 	/* No start state. */
 	startState(0),
 	errState(0),
@@ -58,6 +63,8 @@ FsmAp::FsmAp()
 /* Copy all graph data including transitions. */
 FsmAp::FsmAp( const FsmAp &graph )
 :
+	ctx( graph.ctx ),
+
 	/* Lists start empty. Will be filled by copy. */
 	stateList(),
 	misfitList(),
@@ -90,7 +97,7 @@ FsmAp::FsmAp( const FsmAp &graph )
 	/* Derefernce all the state maps. */
 	for ( StateList::Iter state = stateList; state.lte(); state++ ) {
 		for ( TransList::Iter trans = state->outList; trans.lte(); trans++ ) {
-			for ( CondTransList::Iter cti = trans->ctList; cti.lte(); cti++ ) {
+			for ( CondList::Iter cti = trans->condList; cti.lte(); cti++ ) {
 				/* The points to the original in the src machine. The taget's duplicate
 				 * is in the statemap. */
 				StateAp *toState = cti->toState != 0 ? cti->toState->alg.stateMap : 0;
@@ -357,7 +364,7 @@ void FsmAp::markReachableFromHere( StateAp *state )
 
 	/* Recurse on all out transitions. */
 	for ( TransList::Iter trans = state->outList; trans.lte(); trans++ ) {
-		for ( CondTransList::Iter cond = trans->ctList; cond.lte(); cond++ ) {
+		for ( CondList::Iter cond = trans->condList; cond.lte(); cond++ ) {
 			if ( cond->toState != 0 )
 				markReachableFromHere( cond->toState );
 		}
@@ -376,9 +383,11 @@ void FsmAp::markReachableFromHereStopFinal( StateAp *state )
 
 	/* Recurse on all out transitions. */
 	for ( TransList::Iter trans = state->outList; trans.lte(); trans++ ) {
-		StateAp *toState = trans->ctList.head->toState;
-		if ( toState != 0 && !toState->isFinState() )
-			markReachableFromHereStopFinal( toState );
+		for ( CondList::Iter cond = trans->condList; cond.lte(); cond++ ) {
+			StateAp *toState = cond->toState;
+			if ( toState != 0 && !toState->isFinState() )
+				markReachableFromHereStopFinal( toState );
+		}
 	}
 }
 
@@ -395,10 +404,8 @@ void FsmAp::markReachableFromHereReverse( StateAp *state )
 	state->stateBits |= STB_ISMARKED;
 
 	/* Recurse on all items in transitions. */
-	for ( TransInList<CondAp>::Iter t = state->inList; t.lte(); t++ ) {
-		TransAp *trans = t->transAp;
-		markReachableFromHereReverse( trans->ctList.head->fromState );
-	}
+	for ( TransInList<CondAp>::Iter t = state->inList; t.lte(); t++ )
+		markReachableFromHereReverse( t->fromState );
 }
 
 /* Determine if there are any entry points into a start state other than the
@@ -444,17 +451,19 @@ void FsmAp::setFinBits( int finStateBits )
 /* Tests the integrity of the transition lists and the fromStates. */
 void FsmAp::verifyIntegrity()
 {
-	std::cout << "FIXME: " << __PRETTY_FUNCTION__ << std::endl;
+	std::cerr << "FIXME: " << __PRETTY_FUNCTION__ << std::endl;
 
 	for ( StateList::Iter state = stateList; state.lte(); state++ ) {
 		/* Walk the out transitions and assert fromState is correct. */
-		for ( TransList::Iter trans = state->outList; trans.lte(); trans++ )
-			assert( trans->ctList.head->fromState == state );
+		for ( TransList::Iter trans = state->outList; trans.lte(); trans++ ) {
+			for ( CondList::Iter cond = trans->condList; cond.lte(); cond++ ) {
+				assert( cond->fromState == state );
+			}
+		}
 
 		/* Walk the inlist and assert toState is correct. */
 		for ( TransInList<CondAp>::Iter t = state->inList; t.lte(); t++ ) {
-			TransAp *trans = t->transAp;
-			assert( trans->ctList.head->toState == state );
+			assert( t->toState == state );
 		}
 	}
 }
@@ -504,7 +513,7 @@ void FsmAp::depthFirstOrdering( StateAp *state )
 	
 	/* Recurse on everything ranges. */
 	for ( TransList::Iter tel = state->outList; tel.lte(); tel++ ) {
-		for ( CondTransList::Iter cond = tel->ctList; cond.lte(); cond++ ) {
+		for ( CondList::Iter cond = tel->condList; cond.lte(); cond++ ) {
 			if ( cond->toState != 0 )
 				depthFirstOrdering( cond->toState );
 		}
@@ -562,69 +571,40 @@ void FsmAp::setStateNumbers( int base )
 
 bool FsmAp::checkErrTrans( StateAp *state, CondAp *trans )
 {
-	std::cout << "FIXME: " << __PRETTY_FUNCTION__ << std::endl;
-
 	/* Might go directly to error state. */
 	if ( trans->toState == 0 )
 		return true;
-
-//	FIXME: look for gaps.
-//	if ( trans->prev == 0 ) {
-//		/* If this is the first transition. */
-//		if ( keyOps->minKey < trans->lowKey )
-//			return true;
-//	}
-//	else {
-//		/* Not the first transition. Compare against the prev. */
-//		TransAp *prev = trans->prev;
-//		Key nextKey = prev->highKey;
-//		nextKey.increment();
-//		if ( nextKey < trans->lowKey )
-//			return true; 
-//	}
 
 	return false;
 }
 
 bool FsmAp::checkErrTrans( StateAp *state, TransAp *trans )
 {
-	/* Might go directly to error state. */
-	if ( trans->ctList.head->toState == 0 )
-		return true;
-
+	/* 
+	 * Look for a gap between this transition and the previous.
+	 */
 	if ( trans->prev == 0 ) {
 		/* If this is the first transition. */
-		if ( keyOps->minKey < trans->lowKey )
+		if ( ctx->keyOps->lt( ctx->keyOps->minKey, trans->lowKey ) )
 			return true;
 	}
 	else {
 		/* Not the first transition. Compare against the prev. */
 		TransAp *prev = trans->prev;
 		Key nextKey = prev->highKey;
-		nextKey.increment();
-		if ( nextKey < trans->lowKey )
+		ctx->keyOps->increment( nextKey );
+		if ( ctx->keyOps->lt( nextKey, trans->lowKey ) )
 			return true; 
 	}
 
-	if ( trans->condSpace == 0 ) {
-		/* If there is no cond space then we are just dealing with a single
-		 * transtion. (optionally) */
-		if ( trans->ctList.length() == 0 )
+	/* Check for gaps in the condition list. */
+	if ( trans->condList.length() < trans->condFullSize() )
+		return true;
+
+	/* Check all destinations. */
+	for ( CondList::Iter cti = trans->condList; cti.lte(); cti++ ) {
+		if ( checkErrTrans( state, cti ) )
 			return true;
-		else { 
-			CondAp *cond = trans->ctList.head;
-			if ( cond->toState == 0 )
-				return true;
-		}
-	}
-	else {
-		/* Need to check destination, as well as for gaps. Use the condSpace to
-		 * determine where to end. */
-		for ( CondTransList::Iter cti = trans->ctList; cti.lte(); cti++ ) {
-			bool res = checkErrTrans( state, cti );
-			if ( res )
-				return true;
-		}
 	}
 
 	return false;
@@ -638,7 +618,7 @@ bool FsmAp::checkErrTransFinish( StateAp *state )
 	else {
 		/* Get the last and check for a gap on the end. */
 		TransAp *last = state->outList.tail;
-		if ( last->highKey < keyOps->maxKey )
+		if ( ctx->keyOps->lt( last->highKey, ctx->keyOps->maxKey ) )
 			return true;
 	}
 	return 0;

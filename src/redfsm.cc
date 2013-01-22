@@ -38,14 +38,17 @@ string GenAction::nameOrLoc()
 	}
 }
 
-RedFsmAp::RedFsmAp()
+RedFsmAp::RedFsmAp( KeyOps *keyOps )
 :
+	keyOps(keyOps),
 	forcedErrorState(false),
 	nextActionId(0),
 	nextTransId(0),
+	nextCondId(0),
 	startState(0),
 	errState(0),
 	errTrans(0),
+	errCond(0),
 	firstFinState(0),
 	numFinStates(0),
 	bAnyToStateActions(false),
@@ -61,7 +64,7 @@ RedFsmAp::RedFsmAp()
 	bAnyRegNextStmt(false),
 	bAnyRegCurStateRef(false),
 	bAnyRegBreak(false),
-	bAnyConditions(false)
+	bUsingAct(false)
 {
 }
 
@@ -87,8 +90,10 @@ void RedFsmAp::depthFirstOrdering( RedStateAp *state )
 
 	/* Recurse on everything ranges. */
 	for ( RedTransList::Iter rtel = state->outRange; rtel.lte(); rtel++ ) {
-		if ( rtel->value->targ != 0 )
-			depthFirstOrdering( rtel->value->targ );
+		for ( RedCondList::Iter c = rtel->value->outConds; c.lte(); c++ ) {
+			if ( c->value->targ != 0 )
+				depthFirstOrdering( c->value->targ );
+		}
 	}
 }
 
@@ -225,8 +230,8 @@ bool RedFsmAp::canExtend( const RedTransList &list, int pos )
 	for ( int next = pos + 1; next < list.length(); pos++, next++ ) {
 		/* If they are not continuous then cannot extend. */
 		Key nextKey = list[next].lowKey;
-		nextKey.decrement();
-		if ( list[pos].highKey != nextKey )
+		keyOps->decrement( nextKey );
+		if ( keyOps->ne( list[pos].highKey, nextKey ) )
 			break;
 
 		/* Check for the extenstion property. */
@@ -287,27 +292,6 @@ void RedFsmAp::chooseSingle()
 void RedFsmAp::makeFlat()
 {
 	for ( RedStateList::Iter st = stateList; st.lte(); st++ ) {
-		if ( st->stateCondList.length() == 0 ) {
-			st->condLowKey = 0;
-			st->condHighKey = 0;
-		}
-		else {
-			st->condLowKey = st->stateCondList.head->lowKey;
-			st->condHighKey = st->stateCondList.tail->highKey;
-
-			unsigned long long span = keyOps->span( st->condLowKey, st->condHighKey );
-			st->condList = new GenCondSpace*[ span ];
-			memset( st->condList, 0, sizeof(GenCondSpace*)*span );
-
-			for ( GenStateCondList::Iter sci = st->stateCondList; sci.lte(); sci++ ) {
-				unsigned long long base, trSpan;
-				base = keyOps->span( st->condLowKey, sci->lowKey )-1;
-				trSpan = keyOps->span( sci->lowKey, sci->highKey );
-				for ( unsigned long long pos = 0; pos < trSpan; pos++ )
-					st->condList[base+pos] = sci->condSpace;
-			}
-		}
-
 		if ( st->outRange.length() == 0 ) {
 			st->lowKey = st->highKey = 0;
 			st->transList = 0;
@@ -366,21 +350,21 @@ bool RedFsmAp::alphabetCovered( RedTransList &outRange )
 	/* If the first range doesn't start at the the lower bound then the
 	 * alphabet is not covered. */
 	RedTransList::Iter rtel = outRange;
-	if ( keyOps->minKey < rtel->lowKey )
+	if ( keyOps->lt( keyOps->minKey, rtel->lowKey ) )
 		return false;
 
 	/* Check that every range is next to the previous one. */
 	rtel.increment();
 	for ( ; rtel.lte(); rtel++ ) {
 		Key highKey = rtel[-1].highKey;
-		highKey.increment();
-		if ( highKey != rtel->lowKey )
+		keyOps->increment( highKey );
+		if ( keyOps->ne( highKey, rtel->lowKey ) )
 			return false;
 	}
 
 	/* The last must extend to the upper bound. */
 	RedTransEl *last = &outRange[outRange.length()-1];
-	if ( last->highKey < keyOps->maxKey )
+	if ( keyOps->lt( last->highKey, keyOps->maxKey ) )
 		return false;
 
 	return true;
@@ -442,8 +426,10 @@ RedTransAp *RedFsmAp::chooseDefaultGoto( RedStateAp *state )
 	/* Make a set of transitions from the outRange. */
 	RedTransSet stateTransSet;
 	for ( RedTransList::Iter rtel = state->outRange; rtel.lte(); rtel++ ) {
-		if ( rtel->value->targ == state->next )
-			return rtel->value;
+		for ( RedCondList::Iter cond = rtel->value->outConds; cond.lte(); cond++ ) {
+			if ( cond->value->targ == state->next )
+				return rtel->value;
+		}
 	}
 	return 0;
 }
@@ -506,15 +492,30 @@ void RedFsmAp::chooseDefaultNumRanges()
 	}
 }
 
-RedTransAp *RedFsmAp::getErrorTrans( )
+RedCondAp *RedFsmAp::getErrorCond()
+{
+	if ( errCond == 0 ) {
+		/* Create the cond transition. This should also always succeed. */
+		errCond = new RedCondAp( getErrorState(), 0, nextCondId++ );
+		RedCondAp *inCondSet = condSet.insert( errCond );
+		assert( inCondSet != 0 );
+	}
+	return errCond;
+}
+
+RedTransAp *RedFsmAp::getErrorTrans()
 {
 	/* If the error trans has not been made aready, make it. */
 	if ( errTrans == 0 ) {
-		/* This insert should always succeed since no transition created by
-		 * the user can point to the error state. */
-		errTrans = new RedTransAp( getErrorState(), 0, nextTransId++ );
-		RedTransAp *inRes = transSet.insert( errTrans );
-		assert( inRes != 0 );
+		/* This insert should always succeed. No transition created by the user
+		 * can point to the error state. */
+		errTrans = new RedTransAp( nextTransId++ );
+		RedTransAp *inTransSet = transSet.insert( errTrans );
+		assert( inTransSet != 0 );
+
+		/* Give it a cond transition. */
+		RedCondAp *errCond = getErrorCond();
+		errTrans->outConds.append( RedCondEl( 0, errCond ) );
 	}
 	return errTrans;
 }
@@ -528,13 +529,15 @@ RedStateAp *RedFsmAp::getErrorState()
 }
 
 
-RedTransAp *RedFsmAp::allocateTrans( RedStateAp *targ, RedAction *action )
+RedTransAp *RedFsmAp::allocateTrans( GenCondSpace *condSpace )
 {
 	/* Create a reduced trans and look for it in the transiton set. */
-	RedTransAp redTrans( targ, action, 0 );
+	RedTransAp redTrans( 0 );
+	redTrans.condSpace = condSpace;
 	RedTransAp *inDict = transSet.find( &redTrans );
 	if ( inDict == 0 ) {
-		inDict = new RedTransAp( targ, action, nextTransId++ );
+		inDict = new RedTransAp( nextTransId++ );
+		inDict->condSpace = condSpace;
 		transSet.insert( inDict );
 	}
 	return inDict;
@@ -546,7 +549,7 @@ RedCondAp *RedFsmAp::allocateCond( RedStateAp *targ, RedAction *action )
 	RedCondAp redCond( targ, action, 0 );
 	RedCondAp *inDict = condSet.find( &redCond );
 	if ( inDict == 0 ) {
-		inDict = new RedCondAp( targ, action, nextTransId++ );
+		inDict = new RedCondAp( targ, action, nextCondId++ );
 		condSet.insert( inDict );
 	}
 	return inDict;
@@ -579,17 +582,16 @@ void RedFsmAp::partitionFsm( int nparts )
 void RedFsmAp::setInTrans()
 {
 	/* First pass counts the number of transitions. */
-	for ( TransApSet::Iter trans = transSet; trans.lte(); trans++ )
-		trans->targ->numInTrans += 1;
+	for ( CondApSet::Iter trans = condSet; trans.lte(); trans++ )
+		trans->targ->numInConds += 1;
 
 	/* Pass over states to allocate the needed memory. Reset the counts so we
 	 * can use them as the current size. */
 	for ( RedStateList::Iter st = stateList; st.lte(); st++ ) {
-		st->inTrans = new RedTransAp*[st->numInTrans];
-		st->numInTrans = 0;
+		st->inConds = new RedCondAp*[st->numInConds];
+		st->numInConds = 0;
 	}
 
-	/* Second pass over transitions copies pointers into the in trans list. */
-	for ( TransApSet::Iter trans = transSet; trans.lte(); trans++ )
-		trans->targ->inTrans[trans->targ->numInTrans++] = trans;
+	for ( CondApSet::Iter trans = condSet; trans.lte(); trans++ )
+		trans->targ->inConds[trans->targ->numInConds++] = trans;
 }

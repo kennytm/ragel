@@ -291,7 +291,7 @@ void LongestMatch::resolveNameRefs( ParseData *pd )
 
 void LongestMatch::restart( FsmAp *graph, TransAp *trans )
 {
-	for ( CondTransList::Iter cti = trans->ctList; cti.lte(); cti++ ) {
+	for ( CondList::Iter cti = trans->condList; cti.lte(); cti++ ) {
 		StateAp *fromState = cti->fromState;
 		graph->detachCondTrans( fromState, cti->toState, cti );
 		graph->attachTrans( fromState, graph->startState, cti );
@@ -314,9 +314,9 @@ void LongestMatch::runLongestMatch( ParseData *pd, FsmAp *graph )
 	 * next pass we have the item set entries from all lmAction tables. */
 	for ( StateList::Iter st = graph->stateList; st.lte(); st++ ) {
 		for ( TransList::Iter trans = st->outList; trans.lte(); trans++ ) {
-			if ( trans->ctList.head->lmActionTable.length() > 0 ) {
-				LmActionTableEl *lmAct = trans->ctList.head->lmActionTable.data;
-				StateAp *toState = trans->ctList.head->toState;
+			if ( trans->condList.head->lmActionTable.length() > 0 ) {
+				LmActionTableEl *lmAct = trans->condList.head->lmActionTable.data;
+				StateAp *toState = trans->condList.head->toState;
 				assert( toState );
 
 				/* Can only optimize this if there are no transitions out.
@@ -375,9 +375,9 @@ void LongestMatch::runLongestMatch( ParseData *pd, FsmAp *graph )
 	 * id and set the token ending. */
 	for ( StateList::Iter st = graph->stateList; st.lte(); st++ ) {
 		for ( TransList::Iter trans = st->outList; trans.lte(); trans++ ) {
-			if ( trans->ctList.head->lmActionTable.length() > 0 ) {
-				LmActionTableEl *lmAct = trans->ctList.head->lmActionTable.data;
-				StateAp *toState = trans->ctList.head->toState;
+			if ( trans->condList.head->lmActionTable.length() > 0 ) {
+				LmActionTableEl *lmAct = trans->condList.head->lmActionTable.data;
+				StateAp *toState = trans->condList.head->toState;
 				assert( toState );
 
 				/* Can only optimize this if there are no transitions out.
@@ -392,7 +392,7 @@ void LongestMatch::runLongestMatch( ParseData *pd, FsmAp *graph )
 					 * actions then it will fail because the out action will
 					 * have been transferred to an error transition, which
 					 * makes the outlist non-empty. */
-					trans->ctList.head->actionTable.setAction( lmAct->key, 
+					trans->condList.head->actionTable.setAction( lmAct->key, 
 							lmAct->value->actOnLast );
 					restartTrans.append( trans );
 				}
@@ -421,13 +421,13 @@ void LongestMatch::runLongestMatch( ParseData *pd, FsmAp *graph )
 					 * because the error action that matches the token will
 					 * require it. */
 					if ( nonFinalNonEmptyItemSet || maxItemSetLength > 1 )
-						trans->ctList.head->actionTable.setAction( pd->setTokEndOrd, pd->setTokEnd );
+						trans->condList.head->actionTable.setAction( pd->setTokEndOrd, pd->setTokEnd );
 
 					/* Some states may not know which longest match item to
 					 * execute, must set it. */
 					if ( maxItemSetLength > 1 ) {
 						/* There are transitions out, another match may come. */
-						trans->ctList.head->actionTable.setAction( lmAct->key, 
+						trans->condList.head->actionTable.setAction( lmAct->key, 
 								lmAct->value->setActId );
 					}
 				}
@@ -538,9 +538,9 @@ FsmAp *MachineDef::walk( ParseData *pd )
 		rtnVal = longestMatch->walk( pd );
 		break;
 	case LengthDefType:
-		condData->lastCondKey.increment();
-		rtnVal = new FsmAp();
-		rtnVal->concatFsm( condData->lastCondKey );
+		/* Towards lengths. */
+		rtnVal = new FsmAp( pd->fsmCtx );
+		rtnVal->lambdaFsm();
 		break;
 	}
 	return rtnVal;
@@ -1435,7 +1435,7 @@ FsmAp *FactorWithRep::walk( ParseData *pd )
 	}
 	case OptionalType: {
 		/* Make the null fsm. */
-		FsmAp *nu = new FsmAp();
+		FsmAp *nu = new FsmAp( pd->fsmCtx );
 		nu->lambdaFsm( );
 
 		/* Evaluate the FactorWithRep. */
@@ -1476,7 +1476,7 @@ FsmAp *FactorWithRep::walk( ParseData *pd )
 			warning(loc) << "exactly zero repetitions results "
 					"in the null machine" << endl;
 
-			retFsm = new FsmAp();
+			retFsm = new FsmAp( pd->fsmCtx );
 			retFsm->lambdaFsm();
 		}
 		else {
@@ -1505,7 +1505,7 @@ FsmAp *FactorWithRep::walk( ParseData *pd )
 			warning(loc) << "max zero repetitions results "
 					"in the null machine" << endl;
 
-			retFsm = new FsmAp();
+			retFsm = new FsmAp( pd->fsmCtx );
 			retFsm->lambdaFsm();
 		}
 		else {
@@ -1567,7 +1567,7 @@ FsmAp *FactorWithRep::walk( ParseData *pd )
 			error(loc) << "invalid range repetition" << endl;
 
 			/* Return null machine as recovery. */
-			retFsm = new FsmAp();
+			retFsm = new FsmAp( pd->fsmCtx );
 			retFsm->lambdaFsm();
 		}
 		else if ( lowerRep == 0 && upperRep == 0 ) {
@@ -1576,7 +1576,7 @@ FsmAp *FactorWithRep::walk( ParseData *pd )
 			warning(loc) << "zero to zero repetitions results "
 					"in the null machine" << endl;
 
-			retFsm = new FsmAp();
+			retFsm = new FsmAp( pd->fsmCtx );
 			retFsm->lambdaFsm();
 		}
 		else {
@@ -1870,14 +1870,14 @@ FsmAp *Range::walk( ParseData *pd )
 	delete upperFsm;
 
 	/* Validate the range. */
-	if ( lowKey > highKey ) {
+	if ( pd->fsmCtx->keyOps->gt( lowKey, highKey ) ) {
 		/* Recover by setting upper to lower; */
 		error(lowerLit->token.loc) << "lower end of range is greater then upper end" << endl;
 		highKey = lowKey;
 	}
 
 	/* Return the range now that it is validated. */
-	FsmAp *retFsm = new FsmAp();
+	FsmAp *retFsm = new FsmAp( pd->fsmCtx );
 	retFsm->rangeFsm( lowKey, highKey );
 	return retFsm;
 }
@@ -1893,7 +1893,7 @@ FsmAp *Literal::walk( ParseData *pd )
 		/* Make the fsm key in int format. */
 		Key fsmKey = makeFsmKeyNum( token.data, token.loc, pd );
 		/* Make the new machine. */
-		rtnVal = new FsmAp();
+		rtnVal = new FsmAp( pd->fsmCtx );
 		rtnVal->concatFsm( fsmKey );
 		break;
 	}
@@ -1907,7 +1907,7 @@ FsmAp *Literal::walk( ParseData *pd )
 		makeFsmKeyArray( arr, data, length, pd );
 
 		/* Make the new machine. */
-		rtnVal = new FsmAp();
+		rtnVal = new FsmAp( pd->fsmCtx );
 		if ( caseInsensitive )
 			rtnVal->concatFsmCI( arr, length );
 		else
@@ -1949,7 +1949,7 @@ FsmAp *RegExpr::walk( ParseData *pd, RegExpr *rootRegex )
 			break;
 		}
 		case Empty: {
-			rtnVal = new FsmAp();
+			rtnVal = new FsmAp( pd->fsmCtx );
 			rtnVal->lambdaFsm();
 			break;
 		}
@@ -1984,7 +1984,7 @@ FsmAp *ReItem::walk( ParseData *pd, RegExpr *rootRegex )
 			makeFsmKeyArray( arr, token.data, token.length, pd );
 
 			/* Make the concat fsm. */
-			rtnVal = new FsmAp();
+			rtnVal = new FsmAp( pd->fsmCtx );
 			if ( rootRegex != 0 && rootRegex->caseInsensitive )
 				rtnVal->concatFsmCI( arr, token.length );
 			else
@@ -2001,7 +2001,7 @@ FsmAp *ReItem::walk( ParseData *pd, RegExpr *rootRegex )
 			/* Get the or block and minmize it. */
 			rtnVal = orBlock->walk( pd, rootRegex );
 			if ( rtnVal == 0 ) {
-				rtnVal = new FsmAp();
+				rtnVal = new FsmAp( pd->fsmCtx );
 				rtnVal->lambdaFsm();
 			}
 			rtnVal->minimizePartition2();
@@ -2075,18 +2075,20 @@ FsmAp *ReOrBlock::walk( ParseData *pd, RegExpr *rootRegex )
 /* Evaluate an or block item of a regular expression. */
 FsmAp *ReOrItem::walk( ParseData *pd, RegExpr *rootRegex )
 {
+	KeyOps *keyOps = pd->fsmCtx->keyOps;
+
 	/* The return value, is the alphabet signed? */
 	FsmAp *rtnVal = 0;
 	switch ( type ) {
 	case Data: {
 		/* Make the or machine. */
-		rtnVal = new FsmAp();
+		rtnVal = new FsmAp( pd->fsmCtx );
 
 		/* Put the or data into an array of ints. Note that we find unique
 		 * keys. Duplicates are silently ignored. The alternative would be to
 		 * issue warning or an error but since we can't with [a0-9a] or 'a' |
 		 * 'a' don't bother here. */
-		KeySet keySet;
+		KeySet keySet( keyOps );
 		makeFsmUniqueKeyArray( keySet, token.data, token.length, 
 			rootRegex != 0 ? rootRegex->caseInsensitive : false, pd );
 
@@ -2100,37 +2102,37 @@ FsmAp *ReOrItem::walk( ParseData *pd, RegExpr *rootRegex )
 		Key highKey = makeFsmKeyChar( upper, pd );
 
 		/* Validate the range. */
-		if ( lowKey > highKey ) {
+		if ( keyOps->gt( lowKey, highKey ) ) {
 			/* Recover by setting upper to lower; */
 			error(loc) << "lower end of range is greater then upper end" << endl;
 			highKey = lowKey;
 		}
 
 		/* Make the range machine. */
-		rtnVal = new FsmAp();
+		rtnVal = new FsmAp( pd->fsmCtx );
 		rtnVal->rangeFsm( lowKey, highKey );
 
 		if ( rootRegex != 0 && rootRegex->caseInsensitive ) {
-			if ( lowKey <= 'Z' && 'A' <= highKey ) {
-				Key otherLow = lowKey < 'A' ? Key('A') : lowKey;
-				Key otherHigh = 'Z' < highKey ? Key('Z') : highKey;
+			if ( keyOps->le( lowKey, 'Z' ) && pd->fsmCtx->keyOps->le( 'A', highKey ) ) {
+				Key otherLow = keyOps->lt( lowKey, 'A' ) ? Key('A') : lowKey;
+				Key otherHigh = keyOps->lt( 'Z', highKey ) ? Key('Z') : highKey;
 
-				otherLow = 'a' + ( otherLow - 'A' );
-				otherHigh = 'a' + ( otherHigh - 'A' );
+				otherLow = keyOps->add( 'a', ( keyOps->sub( otherLow, 'A' ) ) );
+				otherHigh = keyOps->add( 'a', ( keyOps->sub( otherHigh, 'A' ) ) );
 
-				FsmAp *otherRange = new FsmAp();
+				FsmAp *otherRange = new FsmAp( pd->fsmCtx );
 				otherRange->rangeFsm( otherLow, otherHigh );
 				rtnVal->unionOp( otherRange );
 				rtnVal->minimizePartition2();
 			}
-			else if ( lowKey <= 'z' && 'a' <= highKey ) {
-				Key otherLow = lowKey < 'a' ? Key('a') : lowKey;
-				Key otherHigh = 'z' < highKey ? Key('z') : highKey;
+			else if ( keyOps->le( lowKey, 'z' ) && keyOps->le( 'a', highKey ) ) {
+				Key otherLow = keyOps->lt( lowKey, 'a' ) ? Key('a') : lowKey;
+				Key otherHigh = keyOps->lt( 'z', highKey ) ? Key('z') : highKey;
 
-				otherLow = 'A' + ( otherLow - 'a' );
-				otherHigh = 'A' + ( otherHigh - 'a' );
+				otherLow = keyOps->add('A' , ( keyOps->sub( otherLow , 'a' ) ));
+				otherHigh = keyOps->add('A' , ( keyOps->sub( otherHigh , 'a' ) ));
 
-				FsmAp *otherRange = new FsmAp();
+				FsmAp *otherRange = new FsmAp( pd->fsmCtx );
 				otherRange->rangeFsm( otherLow, otherHigh );
 				rtnVal->unionOp( otherRange );
 				rtnVal->minimizePartition2();
