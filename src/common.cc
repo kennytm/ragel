@@ -34,7 +34,10 @@ HostType hostTypesC[] =
 	{ "int",      0,       "int",     true,   true,  false,  INT_MIN,   INT_MAX,    sizeof(int) },
 	{ "unsigned", "int",   "uint",    false,  true,  false,  0,         UINT_MAX,   sizeof(unsigned int) },
 	{ "long",     0,       "long",    true,   true,  false,  LONG_MIN,  LONG_MAX,   sizeof(long) },
-	{ "unsigned", "long",  "ulong",   false,  true,  false,  0,         ULONG_MAX,  sizeof(unsigned long) }
+	{ "unsigned", "long",  "ulong",   false,  true,  false,  0,         ULONG_MAX,  sizeof(unsigned long) },
+	{ "signed",   "char",  "char",    true,   true,  false,  SCHAR_MIN, SCHAR_MAX,  sizeof(signed char) },
+	{ "char16_t", 0,       "ushort",  false,  true,  false,  0,         0xffff,     2 },
+	{ "char32_t", 0,       "uint",    false,  true,  false,  0,         0xffffffff, 4 },
 };
 
 #define S8BIT_MIN  -128
@@ -134,7 +137,7 @@ HostType hostTypesOCaml[] =
 	{ "int",    0,  "int",      true,   true,  false, S31BIT_MIN, S31BIT_MAX, 4 },
 };
 
-HostLang hostLangC =      { HostLang::C,      hostTypesC,      8,  hostTypesC+0,       true };
+HostLang hostLangC =      { HostLang::C,      hostTypesC,     11,  hostTypesC+0,       true };
 HostLang hostLangD =      { HostLang::D,      hostTypesD,      9,  hostTypesD+2,       true };
 HostLang hostLangD2 =     { HostLang::D2,     hostTypesD,      9,  hostTypesD+2,       true };
 HostLang hostLangGo =     { HostLang::Go,     hostTypesGo,    10,  hostTypesGo+0,      false };
